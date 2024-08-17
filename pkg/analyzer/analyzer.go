@@ -5,44 +5,67 @@ import (
 	"go/token"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/inspector"
 )
 
 var Analyzer = &analysis.Analyzer{
-	Name: "gobreakselectinfor",
-	Doc:  "Checks that using break statement inside select inside for loop",
-	Run:  run,
+	Name:     "gobreakselectinfor",
+	Doc:      "Checks that using break statement inside select inside for loop",
+	Run:      run,
+	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
-	inspect := func(node ast.Node) bool {
-		funcDecl, ok := node.(*ast.FuncDecl)
-		if !ok {
-			return true
+	fn := func(node ast.Node) {
+		var body *ast.BlockStmt
+		switch node := node.(type) {
+		case *ast.ForStmt:
+			body = node.Body
+		default:
+			break
 		}
-
-		ast.Inspect(funcDecl.Body, func(stmt ast.Node) bool {
-			if forStmt, ok := stmt.(*ast.ForStmt); ok {
-				ast.Inspect(forStmt.Body, func(stmt ast.Node) bool {
-					if selStmt, ok := stmt.(*ast.SelectStmt); ok {
-						ast.Inspect(selStmt.Body, func(stmt ast.Node) bool {
-							if brkStmt, ok := stmt.(*ast.BranchStmt); ok && brkStmt.Tok == token.BREAK {
-								pass.Reportf(stmt.Pos(), "break statement inside select statement inside for loop")
-								return true
-							}
-							return true
-						})
-					}
-					return true
-				})
+		for _, stmt := range body.List {
+			var blocks [][]ast.Stmt
+			switch stmt := stmt.(type) {
+			case *ast.SelectStmt:
+				for _, c := range stmt.Body.List {
+					blocks = append(blocks, c.(*ast.CommClause).Body)
+				}
+			default:
+				continue
 			}
-			return true
-		})
 
-		return true
+			for _, body := range blocks {
+				if len(body) == 0 {
+					continue
+				}
+				lasts := []ast.Stmt{body[len(body)-1]}
+				if ifs, ok := lasts[0].(*ast.IfStmt); ok {
+					if len(ifs.Body.List) == 0 {
+						continue
+					}
+					lasts[0] = ifs.Body.List[len(ifs.Body.List)-1]
+
+					if block, ok := ifs.Else.(*ast.BlockStmt); ok {
+						if len(block.List) != 0 {
+							lasts = append(lasts, block.List[len(block.List)-1])
+						}
+					}
+				}
+				for _, last := range lasts {
+					branch, ok := last.(*ast.BranchStmt)
+					if !ok || branch.Tok != token.BREAK || branch.Label != nil {
+						continue
+					}
+					pass.Reportf(branch.Pos(), "break statement inside select statement inside for loop")
+				}
+			}
+		}
 	}
 
-	for _, f := range pass.Files {
-		ast.Inspect(f, inspect)
-	}
+	types := []ast.Node{(*ast.ForStmt)(nil)}
+	pass.ResultOf[inspect.Analyzer].(*inspector.Inspector).Preorder(types, fn)
+
 	return nil, nil
 }
