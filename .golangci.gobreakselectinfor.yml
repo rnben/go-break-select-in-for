@@ -1,0 +1,14 @@
+linters-settings:
+  custom:
+    gobreakselectinfor:
+      # Path is required
+      path: gobreakselectinfor.so
+      # Description is optional
+      description: checks that break statement inside select statement inside for loop
+      # Original-url is optional, and is only used for documentation purposes.
+      original-url: github.com/rnben/go-break-select-in-for
+
+linters:
+  disable-all: true
+  enable:
+    - gobreakselectinfor
